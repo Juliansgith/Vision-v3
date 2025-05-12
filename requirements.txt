@@ -1,0 +1,9 @@
+opencv-python
+ultralytics
+numpy
+gradio
+torch
+torchvision
+torchaudio
+deepface
+tf-keras
