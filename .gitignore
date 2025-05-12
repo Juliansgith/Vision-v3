@@ -1,4 +1,5 @@
 venv/
+export_venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -9,3 +10,4 @@ output/
 *.jpg
 *.png
 *.pt
+codebase.md
