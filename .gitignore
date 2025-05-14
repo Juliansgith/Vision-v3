@@ -11,3 +11,6 @@ output/
 *.png
 *.pt
 codebase.md
+*.engine
+yolov8n.engine
+yolov8x.engine
