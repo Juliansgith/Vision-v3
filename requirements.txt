@@ -1,9 +1,14 @@
 opencv-python
 ultralytics
-numpy
+numpy<1.24
 gradio
 torch
 torchvision
 torchaudio
 deepface
-tf-keras
+tensorflow==2.10.0
+protobuf<3.20 
+filterpy
+scipy
+cython-bbox
+yt-dlp

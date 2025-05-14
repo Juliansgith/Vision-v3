@@ -1,168 +1,140 @@
-# Real-time Object & Emotion Detector with YOLO, DeepFace & Gradio
+# Real-time Multi-Analysis Detector with YOLO, DeepFace, SORT & ByteTrack
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-This project demonstrates real-time object detection using **YOLO (Ultralytics)** and facial emotion recognition using **DeepFace**, launched via a user-friendly **Gradio** interface. The application captures video from a webcam or file, performs detections, and displays the annotated video stream in a separate **OpenCV** window.
+This project provides a comprehensive real-time detection system featuring:
+*   **Object Detection:** Using **YOLO (Ultralytics)** with support for PyTorch (`.pt`) and TensorRT (`.engine`) models.
+*   **Person Tracking:** Implementing **SORT (Simple Online and Realtime Tracking)** and **ByteTrack** to assign and maintain IDs for detected persons.
+*   **Facial Analysis:** Leveraging **DeepFace** for emotion, age, and gender recognition.
+*   **Association:** Detected faces and their analyses are associated with tracked persons based on IoU.
+*   **YouTube URL Support:** Directly process videos from YouTube URLs (requires `yt-dlp` and `ffmpeg`).
+*   **Gradio Launcher:** A user-friendly web-based GUI (runs locally) to configure and launch the detection pipeline.
+*   **OpenCV Output:** The annotated video stream is displayed in a separate, interactive OpenCV window.
 
 ## ✨ Features
 
-*   **Dual Detection:** Performs both general object detection (YOLO) and facial emotion recognition (DeepFace) in real-time.
-*   **Gradio Launcher:** Modern, web-based GUI (runs locally) to configure detection parameters before launch.
-    *   Select video source (detected webcams, video file upload, video file path).
-    *   Choose pre-trained YOLO models (e.g., YOLOv8n, YOLOv8s) or specify a custom path.
-    *   Select processing device (CPU or CUDA GPU).
-    *   Adjust initial detection thresholds (confidence, IoU).
-    *   Optionally enable/disable emotion detection at launch.
-    *   Configure initial display options.
-*   **OpenCV Output:** Displays the annotated video stream in a dedicated OpenCV window for clear visualization.
-*   **GPU Acceleration:** Leverages NVIDIA GPUs via CUDA (if configured correctly with PyTorch) for significantly improved performance. CPU fallback available.
-*   **Interactive Controls (OpenCV Window):**
-    *   Toggle Info Overlay (`i`)
-    *   Toggle Emotion Detection (`e`, if initially enabled)
-    *   Cycle YOLO Class Filters (`f`)
-    *   Adjust Confidence Threshold (`+`/`-`)
-    *   Save Screenshot (`s`)
-    *   Record Video Clip (`r`)
-    *   Quit (`q` or `ESC`)
+*   **Multi-Modal Analysis:** Combines object detection, person tracking, and detailed facial analysis.
+*   **Versatile Input Sources:**
+    *   Local video files (upload or path).
+    *   Connected webcams (auto-detected with descriptive names).
+    *   Directly from YouTube video URLs.
+*   **Gradio Launcher:**
+    *   User-friendly interface to select input source, YOLO model, and processing device.
+    *   Fine-tune parameters for YOLO, SORT/ByteTrack, DeepFace, and display options.
+    *   Toggle features like emotion/age-gender detection and person tracking IDs.
+*   **Interactive OpenCV Output:**
+    *   Displays YOLO detections, track IDs for persons, and associated facial analysis (emotion, age, gender) next to tracked individuals.
+    *   Runtime controls for: Info Overlay (`i`), Emotion Detection (`e`), Age/Gender Detection (`a`), Person Tracking IDs (`t`), YOLO Class Filters (`f`), Confidence Threshold (`+`/`-`), Screenshot (`s`), Record (`r`), Quit (`q`/`ESC`).
+*   **GPU Acceleration:** Optimized for NVIDIA GPUs via CUDA (for PyTorch) and TensorRT (for `.engine` models). CPU fallback.
+*   **Organized Output:** Saves screenshots, recordings, and temporary video downloads to structured directories (`output/`, `temp_videos/`).
 
-##  Demo
+## 🎬 Demo
 
-**(Strongly Recommended: Replace this text with an embedded GIF showcasing the Gradio UI launching the OpenCV window with detections!)**
+Watch a quick demonstration of the system in action:
+[Real-time Multi-Analysis Detector Demo](https://www.youtube.com/watch?v=YzcawvDGe4Y)
 
-<!-- Example: <img src="assets/demo.gif" alt="Demo GIF" width="700"/> -->
+*(This demo showcases the Gradio UI for configuration, followed by the OpenCV window displaying object detections, person track IDs, and associated facial analysis on a sample video.)*
 
 ## 💻 Technologies Used
 
-*   Python 3.x
+*   Python 3.8+
 *   OpenCV (`opencv-python`)
-*   PyTorch (`torch`, `torchvision`, `torchaudio`) - CUDA version required for GPU support
+*   PyTorch (`torch`, `torchvision`, `torchaudio`) - CUDA version for GPU
 *   Ultralytics YOLO
-*   DeepFace
+*   DeepFace (and its TensorFlow backend)
+*   SORT (custom implementation with `filterpy` and `scipy`)
+*   ByteTrack (adapted from YOLOX implementation, requires `cython-bbox`)
+*   `yt-dlp` (for YouTube URL processing)
+*   FFmpeg (recommended for `yt-dlp` for optimal format handling and merging)
 *   Gradio
 *   NumPy
 
 ## 🛠️ Setup & Installation
 
-Follow these steps carefully to set up the project environment.
+Follow these steps carefully.
 
 **1. Prerequisites:**
-    *   Python 3.8+ recommended.
-    *   Git installed.
-    *   NVIDIA GPU with suitable drivers installed (if you want GPU acceleration).
+    *   Python 3.8 - 3.10 (TensorFlow 2.10 used by DeepFace has constraints).
+    *   Git.
+    *   NVIDIA GPU with suitable drivers (for GPU acceleration).
+    *   C++ Compiler (required for `cython-bbox`, e.g., MSVC on Windows, GCC on Linux).
+    *   **FFmpeg:** (Highly Recommended, especially for YouTube URL processing with `yt-dlp`). Download from [ffmpeg.org](https://ffmpeg.org/download.html) and ensure it's added to your system's PATH.
 
-**2. Clone the Repository:**
+**2. Clone Repository:**
     ```bash
-    git clone https://github.com/Juliansgith/Vision-v3.git
-    cd Vision-v3
+    git clone https://github.com/yourusername/your-repo-name.git # Replace with your repo URL
+    cd your-repo-name
     ```
 
 **3. Create and Activate Virtual Environment:**
-    *   It's highly recommended to use a virtual environment.
-    *   **On macOS and Linux:**
-        ```bash
-        python3 -m venv venv
-        source venv/bin/activate
-        ```
-    *   **On Windows:**
-        ```bash
-        python -m venv venv
-        .\venv\Scripts\activate
-        ```
+    *   (Highly Recommended)
+    *   macOS/Linux: `python3 -m venv venv && source venv/bin/activate`
+    *   Windows: `python -m venv venv && .\venv\Scripts\activate`
 
-**4. ⭐ Install PyTorch with CUDA (Crucial for GPU Performance):**
-    *   This step is essential for leveraging your NVIDIA GPU. If you skip this or install the wrong version, detection will run significantly slower on the CPU.
-    *   **Uninstall Previous Versions (Recommended):**
-        ```bash
-        pip uninstall torch torchvision torchaudio -y
-        ```
-    *   **Go to the Official PyTorch Website:** [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/)
-    *   **Select Your Configuration:**
-        *   *PyTorch Build:* Stable
-        *   *Your OS:* Windows/Linux/macOS
-        *   *Package:* Pip
-        *   *Language:* Python
-        *   *Compute Platform:* **Select the CUDA version compatible with your NVIDIA drivers** (e.g., CUDA 11.8, CUDA 12.1). Check your driver documentation if unsure. If you don't have an NVIDIA GPU, select `CPU`.
-    *   **Copy the Generated Command:** The website will provide a command like `pip3 install torch ... --index-url ...`.
-    *   **Run the Command in your Activated Virtual Environment.**
+**4. ⭐ Install PyTorch with CUDA (Crucial for GPU with `.pt` models):**
+    *   Go to [https://pytorch.org/get-started/locally/](https://pytorch.org/get-started/locally/).
+    *   Select: Stable, your OS, Pip, Python, **your CUDA version** (e.g., 11.8 or 12.1). If no NVIDIA GPU, select CPU.
+    *   Run the generated `pip install torch...` command in your activated venv.
         ```bash
         # === EXAMPLE ONLY - GET YOUR COMMAND FROM PYTORCH WEBSITE ===
-        # Example for CUDA 12.1 on Windows/Linux:
+        # Example for CUDA 12.1:
         # pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
         # =============================================================
         ```
 
-**5. Install Other Dependencies:**
-    *   Once PyTorch (with CUDA if desired) is installed, install the rest from `requirements.txt`:
-        ```bash
-        pip install -r requirements.txt
-        ```
-    *   This will install `opencv-python`, `ultralytics`, `numpy`, `gradio`, and `deepface` (which includes TensorFlow by default).
-    *   **Note:** The first time you run the application, `ultralytics` (YOLO) and `deepface` may download pre-trained model weights, which can take a few moments depending on your internet connection.
+**5. Install Other Dependencies (from `requirements.txt`):**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    This installs `opencv-python`, `ultralytics`, `numpy<1.24`, `gradio`, `deepface` (which pulls `tensorflow==2.10.0`), `filterpy`, `scipy`, `protobuf<3.20`, `cython-bbox`, and `yt-dlp`.
 
-**6. Verify Installation (Optional but Recommended):**
-    *   Check PyTorch and CUDA:
+    *   **Note:** First run may download model weights for YOLO and DeepFace.
+    *   **`cython-bbox` troubleshooting:** If installation fails, ensure you have a C++ compiler set up correctly. On Windows, this might involve installing "Build Tools for Visual Studio". On Linux, `sudo apt-get install build-essential python3-dev`.
+
+**6. (Optional) Build TensorRT Engines for YOLO:**
+    *   If you have an NVIDIA GPU and want maximum YOLO performance, convert `.pt` models to TensorRT `.engine` files.
+    *   Ensure TensorRT is installed (often comes with CUDA Toolkit or can be installed separately).
+    *   Run the provided script:
         ```bash
-        python -c "import torch; print(f'PyTorch Version: {torch.__version__}'); print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'CUDA Version: {torch.version.cuda if torch.cuda.is_available() else 'N/A'}'); print(f'cuDNN Version: {torch.backends.cudnn.version() if torch.cuda.is_available() else 'N/A'}')"
+        python transformTensorRT.py
         ```
-        Ensure `CUDA Available` is `True` if you intended to install the GPU version.
+        This will create `yolov8n.engine`, `yolov8x.engine`, etc., in your project root. The Gradio UI will list these.
+
+**7. Verify Installation (Optional):**
+    ```bash
+    python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA Available: {torch.cuda.is_available()}'); import tensorflow as tf; print(f'TensorFlow: {tf.__version__}, GPU Available: {tf.config.list_physical_devices('GPU')}')"
+    yt-dlp --version # Should output the yt-dlp version
+    ffmpeg -version  # Should output FFmpeg version information
+    ```
+    Ensure CUDA/GPU is available for PyTorch and TensorFlow if you expect GPU acceleration, and that `yt-dlp` and `ffmpeg` are recognized.
 
 ## 🚀 Usage
 
-1.  **Activate your virtual environment** (if not already active):
-    *   Windows: `.\venv\Scripts\activate`
-    *   Linux/macOS: `source venv/bin/activate`
+1.  **Activate virtual environment.**
 2.  **Run the Gradio Launcher:**
     ```bash
     python gui_launcher.py
     ```
-3.  **Open the Local URL:** The console will output a URL like `http://127.0.0.1:7860`. Open this in your web browser.
+3.  **Open the Local URL** (e.g., `http://127.0.0.1:7860` or `http://127.0.0.1:7861`) in your browser.
 4.  **Configure Settings in Gradio:**
-    *   Select your desired Webcam or provide a video file source.
-    *   Choose the YOLO model.
-    *   Select the Processing Device (CUDA if available, otherwise CPU).
-    *   Check the box to "Enable Emotion Detection" if desired.
-    *   Adjust other parameters as needed.
-5.  **Start Detection:** Click the "Start Detection (in OpenCV window)" button.
-6.  **View Output:**
-    *   A **separate OpenCV window** will open, displaying the video stream with bounding boxes for detected objects and emotion labels (if enabled) near faces.
-    *   Check the console output for initialization messages and potential warnings/errors.
-7.  **Interact with OpenCV Window:** Use the keyboard controls listed below while the OpenCV window is active.
-8.  **Quit:** Press `q` or `ESC` in the OpenCV window to close it and stop the detection process. The Gradio status will update once the process finishes.
+    *   **Select Source Type:** Choose between webcam, "Use Uploaded Video File", or "Use Video Path or URL".
+    *   If using URL, paste the YouTube video URL or a direct video link.
+    *   Select YOLO model (choose `.engine` for TensorRT speed if available).
+    *   Adjust detection, tracking (SORT or ByteTrack), and facial analysis parameters.
+    *   Enable/disable features as needed.
+5.  **Start Detection:** Click the "🚀 Start Detection" button. (If using a YouTube URL, allow time for download).
+6.  **View Output:** An OpenCV window will display the annotated video.
+7.  **Interact:** Use keyboard controls in the OpenCV window.
+8.  **Quit:** Press `q` or `ESC` in the OpenCV window.
 
-## ⌨️ Keyboard Controls (in OpenCV Window)
+**Command Line Interface (CLI):**
+For non-GUI operation, use `main.py`:
+```bash
+# Example with webcam
+python main.py --source 0 --model yolov8s.engine --enable-emotion --show-track-id 
 
-*   `q` or `ESC`: Quit the detection window.
-*   `s`: Save the current annotated frame to the `output/images/` directory.
-*   `r`: Start/Stop recording the annotated video stream to `output/videos/`.
-*   `+` / `=`: Increase YOLO confidence threshold by 0.05.
-*   `-` / `_`: Decrease YOLO confidence threshold by 0.05.
-*   `i`: Toggle the on-screen informational display (FPS, model, etc.).
-*   `f`: Cycle through predefined YOLO class filters (e.g., All -> Person -> Car -> Person+Car -> ...).
-*   `e`: Toggle real-time emotion detection ON/OFF (only works if "Enable Emotion Detection" was checked in the Gradio launcher).
+# Example with local video file
+python main.py --source "/path/to/your/video.mp4" --tracker-type bytetrack
 
-## 🔧 Troubleshooting
-
-*   **Low FPS / Slow Performance:** Almost certainly due to PyTorch not using CUDA. Double-check your PyTorch installation using the verification command in the Setup section. Ensure you selected the correct CUDA version on the PyTorch website and installed it correctly.
-*   **Webcam Not Detected / Errors during Camera Check:** Some systems have specific camera drivers (like OBS virtual cams or depth sensors) that can cause errors or warnings with OpenCV's default detection. The script tries multiple backends (`default`, `DSHOW` on Windows), but if your desired camera isn't listed, ensure its drivers are installed and no other application is using it exclusively. Check the console output for specific errors.
-*   **DeepFace Errors:** On first run, DeepFace downloads models. Ensure you have an internet connection. Errors might also relate to the TensorFlow backend installation or incompatibilities. Check the DeepFace documentation or GitHub issues if problems persist.
-*   **OpenCV Window Doesn't Appear/Freeze:** This can sometimes happen due to conflicts between GUI backends or threading issues. Running the detection in a separate thread (as currently implemented) usually solves this. Ensure no other conflicting GUI libraries are being inadvertently used. Check console logs for errors immediately after starting detection.
-
-## 🚀 Future Improvements
-
-*   Implement a reliable "Stop" button in the Gradio UI (requires more complex thread/process management).
-*   Re-attempt robust video streaming directly within the Gradio UI (e.g., using `gr.Image` or investigating `gr.Video` further).
-*   Add object tracking (e.g., using DeepSORT or BoT-SORT with YOLO).
-*   Allow selection of DeepFace face detector backend in Gradio UI.
-*   Optimize performance further (e.g., frame skipping, model quantization).
-
-## 🙏 Acknowledgements
-
-*   **Ultralytics:** For their excellent YOLO implementations. [https://ultralytics.com/](https://ultralytics.com/)
-*   **DeepFace:** For the comprehensive face analysis library. [https://github.com/serengil/deepface](https://github.com/serengil/deepface)
-*   **OpenCV:** The backbone for video capture and image manipulation. [https://opencv.org/](https://opencv.org/)
-*   **Gradio:** For the easy-to-use GUI framework. [https://www.gradio.app/](https://www.gradio.app/)
-*   **PyTorch Team:** For the deep learning framework. [https://pytorch.org/](https://pytorch.org/)
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+# See 'python main.py --help' for all options
+# Note: Direct YouTube URL processing via CLI would require similar yt-dlp logic in main.py
