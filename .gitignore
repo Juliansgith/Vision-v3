@@ -14,3 +14,4 @@ codebase.md
 *.engine
 yolov8n.engine
 yolov8x.engine
+/temp_videos
