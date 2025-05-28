@@ -40,6 +40,13 @@ class DisplayConfig(BaseModel):
     line_thickness: int = 2
     no_info: bool = False # Corresponds to hide_info_overlay
 
+class ReIDConfig(BaseModel):
+    reid_model_path: str = "osnet_x0_25_msmt17.pt"
+    enable_reid: bool = True
+    reid_feature_dim: int = 256
+    reid_match_thresh: float = 0.2  # For cosine distance, lower is better
+    reid_fuse_weight: float = 0.3  # Weight for ReID cost in fusion
+
 class AppConfig(BaseModel):
     source: str = "0"
     output_dir: str = "output"
@@ -51,3 +58,4 @@ class AppSettings(BaseModel):
     tracker: TrackerConfig = Field(default_factory=TrackerConfig)
     deepface: DeepFaceConfig = Field(default_factory=DeepFaceConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
+    reid: ReIDConfig = Field(default_factory=ReIDConfig)

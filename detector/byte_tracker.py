@@ -14,7 +14,7 @@ from .basetrack import BaseTrack, TrackState
 
 class STrack(BaseTrack):
     shared_kalman = KalmanFilter()
-    def __init__(self, tlwh, score):
+    def __init__(self, tlwh, score, feature=None): # Added feature
 
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float)
@@ -24,6 +24,13 @@ class STrack(BaseTrack):
 
         self.score = score
         self.tracklet_len = 0
+
+        # Initialize ReID features
+        self.curr_feat = feature
+        self.smooth_feat = feature # Initialize with the first feature
+        self.features = deque(maxlen=10) # TODO: make maxlen configurable
+        if feature is not None:
+            self.features.append(feature)
 
     def predict(self):
         mean_state = self.mean.copy()
@@ -70,6 +77,18 @@ class STrack(BaseTrack):
             self.track_id = self.next_id()
         self.score = new_track.score
 
+        # Update features on re-activation
+        self.curr_feat = new_track.curr_feat # new_track is an STrack
+        if self.curr_feat is not None:
+            self.features.clear()
+            self.features.append(self.curr_feat)
+            self.smooth_feat = self.curr_feat # Reset smoothed feature to the new current one
+        else:
+            # If the re-activating detection has no feature, clear existing ones
+            self.features.clear()
+            self.smooth_feat = None
+            # self.curr_feat is already None
+
     def update(self, new_track, frame_id):
         """
         Update a matched track
@@ -88,6 +107,25 @@ class STrack(BaseTrack):
         self.is_activated = True
 
         self.score = new_track.score
+
+        # Update features
+        self.curr_feat = new_track.curr_feat # new_track is an STrack, so it has .curr_feat
+        if self.curr_feat is not None:
+            self.features.append(self.curr_feat)
+            
+            # Update smooth_feat using EMA
+            alpha = 0.9 # Smoothing factor
+            if self.smooth_feat is None:
+                self.smooth_feat = self.curr_feat
+            else:
+                # Ensure smooth_feat and curr_feat are compatible for EMA (e.g., numpy arrays)
+                if isinstance(self.smooth_feat, np.ndarray) and isinstance(self.curr_feat, np.ndarray):
+                    self.smooth_feat = alpha * self.smooth_feat + (1 - alpha) * self.curr_feat
+                else:
+                    # Fallback or error if types are not as expected
+                    self.smooth_feat = self.curr_feat # Or log a warning
+        # If curr_feat is None, we might not update smooth_feat or features, or clear them.
+        # For now, if new detection has no feature, existing smooth_feat and features are preserved.
 
     @property
     # @jit(nopython=True)
@@ -145,7 +183,7 @@ class STrack(BaseTrack):
 
 
 class BYTETracker(object):
-    def __init__(self, args, frame_rate=30): # args is expected to be a namespace/object
+    def __init__(self, args, reid_config=None, frame_rate=30): # args is expected to be a namespace/object
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
         self.removed_stracks = []  # type: list[STrack]
@@ -156,8 +194,15 @@ class BYTETracker(object):
         self.buffer_size = int(frame_rate / 30.0 * args.track_buffer)
         self.max_time_lost = self.buffer_size
         self.kalman_filter = KalmanFilter()
+        self.reid_config = reid_config
+        self.enable_reid = self.reid_config.enable_reid if self.reid_config and hasattr(self.reid_config, 'enable_reid') else False
+        if self.enable_reid:
+            print(f"[INFO] ByteTracker initialized with ReID enabled. Match Thresh: {self.reid_config.reid_match_thresh}, Fuse Weight (for ReID): {self.reid_config.reid_fuse_weight}")
+        else:
+            print("[INFO] ByteTracker initialized with ReID disabled.")
 
-    def update(self, output_results, img_info, img_size):
+
+    def update(self, output_results, img_info, img_size, features_list=None): # Added features_list
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -176,22 +221,28 @@ class BYTETracker(object):
         scale = min(img_size[0] / float(img_h), img_size[1] / float(img_w))
         bboxes /= scale
 
-        remain_inds = scores > self.args.track_thresh # Indices of high-confidence detections
-        inds_low = scores > 0.1 # Indices of all detections with score > 0.1
-        inds_high = scores < self.args.track_thresh # Indices of detections with score < high_thresh
+        # Create STrack objects with features for ALL raw detections
+        all_detections_as_stracks = []
+        for i in range(len(bboxes)): # Assuming bboxes is a list/array of bounding boxes
+            feature = None
+            if features_list is not None and i < len(features_list) and features_list[i] is not None:
+                feature = features_list[i]
+            # Convert tlbr (from bboxes) to tlwh for STrack constructor
+            all_detections_as_stracks.append(STrack(STrack.tlbr_to_tlwh(bboxes[i]), scores[i], feature=feature))
 
-        inds_second = np.logical_and(inds_low, inds_high) # Indices of low-confidence detections
-        dets_second = bboxes[inds_second] # Low-confidence detection boxes
-        dets = bboxes[remain_inds] # High-confidence detection boxes
-        scores_keep = scores[remain_inds] # High-confidence scores
-        scores_second = scores[inds_second] # Low-confidence scores
+        # Filter based on scores using original indices/masks
+        # remain_inds, inds_second are boolean masks for the original scores/bboxes array
+        remain_inds = scores > self.args.track_thresh
+        # inds_low = scores > 0.1 # Not strictly needed if using all_detections_as_stracks
+        # inds_high = scores < self.args.track_thresh # Not strictly needed
+        # Recreate inds_second based on all_detections_as_stracks if necessary, or use original scores
+        inds_second = np.logical_and(scores > 0.1, scores < self.args.track_thresh)
 
-        if len(dets) > 0:
-            '''Detections'''
-            detections = [STrack(STrack.tlbr_to_tlwh(tlbr), s) for
-                          (tlbr, s) in zip(dets, scores_keep)]
-        else:
-            detections = []
+        detections = [s for i, s in enumerate(all_detections_as_stracks) if remain_inds[i]]
+        detections_second = [s for i, s in enumerate(all_detections_as_stracks) if inds_second[i]]
+        
+        # No longer need separate creation for dets, scores_keep, dets_second, scores_second
+        # as STrack objects in 'detections' and 'detections_second' already have this info.
 
         ''' Add newly detected tracklets to tracked_stracks'''
         unconfirmed = []
@@ -206,10 +257,41 @@ class BYTETracker(object):
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         # Predict the current location with KF
         STrack.multi_predict(strack_pool)
-        dists = matching.iou_distance(strack_pool, detections) # Changed local_matching to matching
-        if not self.args.mot20: # mot20 is a flag in the original ByteTrack args
-            dists = matching.fuse_score(dists, detections) # Changed local_matching to matching
-        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.args.match_thresh) # Changed local_matching to matching
+        
+        # Calculate IoU distance
+        iou_dists = matching.iou_distance(strack_pool, detections)
+        dists = iou_dists.copy() # Initialize with IoU distances
+
+        if self.enable_reid and len(strack_pool) > 0 and len(detections) > 0 and self.reid_config:
+            tracks_with_features = [t for t in strack_pool if t.smooth_feat is not None]
+            dets_with_features = [d for d in detections if d.curr_feat is not None]
+
+            if len(tracks_with_features) > 0 and len(dets_with_features) > 0:
+                track_indices = [i for i, t in enumerate(strack_pool) if t.smooth_feat is not None]
+                det_indices = [i for i, d in enumerate(detections) if d.curr_feat is not None]
+                
+                emb_dists_subset = matching.embedding_distance(tracks_with_features, dets_with_features)
+                
+                fuse_weight_reid = self.reid_config.reid_fuse_weight
+                reid_match_threshold = self.reid_config.reid_match_thresh
+
+                for i, track_idx in enumerate(track_indices):
+                    for j, det_idx in enumerate(det_indices):
+                        iou_val = iou_dists[track_idx, det_idx]
+                        emb_val = emb_dists_subset[i, j]
+
+                        if emb_val <= reid_match_threshold:
+                            dists[track_idx, det_idx] = (1.0 - fuse_weight_reid) * iou_val + fuse_weight_reid * emb_val
+                        else:
+                            # If ReID match is bad, make the cost very high (effectively relying on IoU or disqualifying)
+                            # Using 1.0 assumes costs are normalized 0-1. A common strategy for "disqualification".
+                            dists[track_idx, det_idx] = 1.0 
+            # If no tracks/detections have features, dists remains iou_dists
+        
+        # Original ByteTrack score fusion (if not MOT20)
+        if not self.args.mot20: 
+            dists = matching.fuse_score(dists, detections) 
+        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.args.match_thresh)
 
         for itracked, idet in matches:
             track = strack_pool[itracked]
@@ -223,15 +305,38 @@ class BYTETracker(object):
 
         ''' Step 3: Second association, with low score detection boxes'''
         # association the untrack to the low score detections
-        if len(dets_second) > 0:
-            '''Detections'''
-            detections_second = [STrack(STrack.tlbr_to_tlwh(tlbr), s) for
-                          (tlbr, s) in zip(dets_second, scores_second)]
-        else:
-            detections_second = []
+        # detections_second is already a list of STrack objects
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
-        dists = matching.iou_distance(r_tracked_stracks, detections_second) # Changed local_matching to matching
-        matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=0.5) # Changed local_matching to matching
+        
+        # Calculate IoU distance for low-score detections
+        iou_dists_low = matching.iou_distance(r_tracked_stracks, detections_second)
+        dists_low = iou_dists_low.copy() # Initialize with IoU distances
+
+        if self.enable_reid and len(r_tracked_stracks) > 0 and len(detections_second) > 0 and self.reid_config:
+            tracks_low_with_features = [t for t in r_tracked_stracks if t.smooth_feat is not None]
+            dets_low_with_features = [d for d in detections_second if d.curr_feat is not None]
+
+            if len(tracks_low_with_features) > 0 and len(dets_low_with_features) > 0:
+                track_indices_low = [i for i, t in enumerate(r_tracked_stracks) if t.smooth_feat is not None]
+                det_indices_low = [i for i, d in enumerate(detections_second) if d.curr_feat is not None]
+                
+                emb_dists_low_subset = matching.embedding_distance(tracks_low_with_features, dets_low_with_features)
+
+                fuse_weight_reid = self.reid_config.reid_fuse_weight
+                reid_match_threshold = self.reid_config.reid_match_thresh
+
+                for i, track_idx in enumerate(track_indices_low):
+                    for j, det_idx in enumerate(det_indices_low):
+                        iou_val = iou_dists_low[track_idx, det_idx]
+                        emb_val = emb_dists_low_subset[i, j]
+                        
+                        if emb_val <= reid_match_threshold:
+                            dists_low[track_idx, det_idx] = (1.0 - fuse_weight_reid) * iou_val + fuse_weight_reid * emb_val
+                        else:
+                            dists_low[track_idx, det_idx] = 1.0 # Penalize bad ReID match
+            # If no tracks/detections have features, dists_low remains iou_dists_low
+
+        matches, u_track, u_detection_second = matching.linear_assignment(dists_low, thresh=0.5) # Note: thresh=0.5 is hardcoded here
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]

@@ -8,8 +8,10 @@ from deepface import DeepFace
 from ..config import AppSettings # Import AppSettings
 from .utils import draw_detections, draw_info_overlay, iou_calc_for_association
 import torch
+import torchvision.transforms as T # Added for ReID
+from PIL import Image # Added for ReID
 import numpy as np
-from .sort_tracker import Sort 
+from .sort_tracker import Sort
 
 BYTETRACK_AVAILABLE = False
 BYTETracker = None
@@ -94,6 +96,23 @@ class ObjectDetector:
         
         self.tracker_type = self.config.tracker.tracker_type # Updated
         self.person_tracker = None
+        self.reid_model = None # Added for ReID
+        self.reid_preprocess = None # Added for ReID
+
+        if self.config.reid.enable_reid: # Added for ReID
+            logger.info("ReID is enabled. Initializing ReID model and preprocessor.")
+            self.reid_model = self._load_reid_model()
+            if self.reid_model:
+                self.reid_preprocess = T.Compose([
+                    T.Resize((256, 128)),  # Typical ReID input size
+                    T.ToTensor(),
+                    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                ])
+                logger.info("ReID preprocessor initialized.")
+            else:
+                logger.warning("ReID model loading failed. ReID will be disabled.")
+                self.config.reid.enable_reid = False # Disable if model failed to load
+
         if self.tracker_type == 'bytetrack' and BYTETRACK_AVAILABLE and BYTETracker is not None:
             bt_params = self.config.tracker.bytetrack_params
             logger.info(f"Initializing ByteTrack: track_thresh={bt_params.bytetrack_track_thresh}, track_buffer(frames)={bt_params.bytetrack_track_buffer}, match_thresh={bt_params.bytetrack_match_thresh}, frame_rate={self.effective_fps_for_tracker}") # Logging
@@ -105,10 +124,11 @@ class ObjectDetector:
                 mot20=False,  
             )
             self.person_tracker = BYTETracker(
-                args=byte_tracker_args_ns, 
+                args=byte_tracker_args_ns,
+                reid_config=self.config.reid, # Pass the ReIDConfig
                 frame_rate=self.effective_fps_for_tracker
             )
-            logger.info("ByteTrack initialized.") # Logging
+            logger.info("ByteTrack initialized with ReID config.") # Logging
         else:
             if self.tracker_type == 'bytetrack' and (not BYTETRACK_AVAILABLE or BYTETracker is None):
                 logger.warning("ByteTrack selected but not available/imported. Falling back to SORT.") # Logging
@@ -130,7 +150,84 @@ class ObjectDetector:
 
         self._print_opencv_instructions()
         self._warmup_models()
-    
+
+    def _load_reid_model(self):
+        model_path = self.config.reid.reid_model_path
+        device_to_use = self.config.yolo.device # Using YOLO's device for ReID for now
+        
+        # Ensure CUDA is available if selected, else fallback to CPU
+        if device_to_use == 'cuda' and not torch.cuda.is_available():
+            logger.warning(f"CUDA selected for ReID model '{os.path.basename(model_path)}' but not available. Falling back to CPU.")
+            device_to_use = 'cpu'
+        
+        target_device = torch.device(device_to_use)
+
+        try:
+            if not os.path.exists(model_path):
+                logger.error(f"ReID model file not found at path: {model_path}")
+                return None
+            
+            logger.info(f"Loading ReID model '{os.path.basename(model_path)}' onto device '{target_device}'...")
+            # Assuming a JIT scripted model or a model that can be loaded directly
+            model = torch.jit.load(model_path, map_location=target_device)
+            model.eval()
+            logger.info(f"ReID model '{os.path.basename(model_path)}' loaded successfully and set to evaluation mode on {target_device}.")
+            return model
+        except RuntimeError as e:
+            # Specific check for JIT load failure that might indicate a state_dict or other format
+            if "is not a zip file" in str(e).lower() or "archive does not contain" in str(e).lower() or "magic number" in str(e).lower():
+                logger.error(f"Failed to load ReID model '{os.path.basename(model_path)}' as a JIT scripted model. It might be a state_dict or another format. Error: {e}", exc_info=True)
+                logger.error("Please ensure the ReID model is a JIT scripted .pt file or adjust loading logic.")
+            else:
+                logger.error(f"Runtime error loading ReID model '{os.path.basename(model_path)}': {e}", exc_info=True)
+            return None
+        except Exception as e:
+            logger.error(f"An unexpected error occurred while loading ReID model '{os.path.basename(model_path)}': {e}", exc_info=True)
+            return None
+
+    def _extract_features(self, frame_bgr, bboxes_xyxy):
+        if not self.config.reid.enable_reid or not self.reid_model or not self.reid_preprocess:
+            logger.debug("ReID is disabled or model/preprocessor not available. Skipping feature extraction.")
+            return [None] * len(bboxes_xyxy)
+
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        all_features = []
+        
+        reid_device = next(self.reid_model.parameters()).device
+
+        for bbox in bboxes_xyxy:
+            x1, y1, x2, y2 = map(int, bbox)
+            
+            # Ensure coordinates are valid and form a non-empty crop
+            if x1 >= x2 or y1 >= y2 or x1 < 0 or y1 < 0 or x2 > frame_rgb.shape[1] or y2 > frame_rgb.shape[0]:
+                logger.warning(f"Invalid bounding box {bbox} for ReID. Skipping.")
+                all_features.append(None)
+                continue
+            
+            crop_rgb = frame_rgb[y1:y2, x1:x2]
+            
+            if crop_rgb.size == 0:
+                logger.warning(f"Empty crop for bbox {bbox}. Skipping ReID.")
+                all_features.append(None)
+                continue
+
+            try:
+                img_pil = Image.fromarray(crop_rgb)
+                input_tensor = self.reid_preprocess(img_pil).unsqueeze(0).to(reid_device)
+                
+                with torch.no_grad():
+                    feature_tensor = self.reid_model(input_tensor)
+                
+                # Normalize the feature (L2 normalization)
+                feature_tensor = torch.nn.functional.normalize(feature_tensor, p=2, dim=1)
+                feature_np = feature_tensor.squeeze().cpu().numpy()
+                all_features.append(feature_np)
+            except Exception as e:
+                logger.error(f"Error extracting ReID feature for bbox {bbox}: {e}", exc_info=True)
+                all_features.append(None)
+        
+        return all_features
+
     def _warmup_models(self):
         model_path = self.config.yolo.model # Updated
         device_for_warmup = 'cpu' 
@@ -169,6 +266,35 @@ class ObjectDetector:
                 logger.warning(f"DeepFace warmup (sync mode) failed: {e_df_warmup}", exc_info=True) # Logging
         elif self.config.deepface.async_deepface and (self.config.deepface.enable_emotion or self.config.deepface.enable_age_gender):
             logger.info("DeepFace warmup will occur in its dedicated thread on first analysis.") # Logging
+
+        # Warmup ReID model
+        if self.config.reid.enable_reid and self.reid_model and self.reid_preprocess: # Check preprocess too for safety
+            try:
+                reid_device = next(self.reid_model.parameters()).device
+                logger.info(f"Warming up ReID model '{os.path.basename(self.config.reid.reid_model_path)}' on {reid_device}...")
+                # Determine input size from preprocess; T.Resize((H, W))
+                # Assuming self.reid_preprocess.transforms[0] is T.Resize
+                h, w = -1, -1
+                for transform in self.reid_preprocess.transforms:
+                    if isinstance(transform, T.Resize):
+                        # T.Resize can take int (shortest edge) or (h, w) tuple/list
+                        if isinstance(transform.size, int):
+                            # This case is ambiguous for exact HxW for ReID, assume a common default or error
+                            logger.warning("ReID warmup: T.Resize is using a single int, cannot determine exact HxW. Assuming 256x128.")
+                            h, w = 256, 128 # Default assumption
+                        elif isinstance(transform.size, (list, tuple)) and len(transform.size) == 2:
+                            h, w = transform.size[0], transform.size[1]
+                        break
+                if h == -1 or w == -1:
+                    logger.warning("Could not determine ReID input HxW from preprocessor for warmup. Using default 256x128.")
+                    h, w = 256, 128 # Fallback default
+
+                dummy_input_reid = torch.zeros(1, 3, h, w).to(reid_device)
+                with torch.no_grad():
+                    self.reid_model(dummy_input_reid)
+                logger.info(f"ReID model '{os.path.basename(self.config.reid.reid_model_path)}' warmed up.")
+            except Exception as e_reid_warmup:
+                logger.warning(f"ReID model warmup failed: {e_reid_warmup}", exc_info=True)
 
     def _load_yolo_model(self):
         model_path = self.config.yolo.model
@@ -356,23 +482,31 @@ class ObjectDetector:
         if self.person_tracker:
             if detections_np_for_tracker.shape[0] > 0:
                 if self.tracker_type == 'bytetrack' and BYTETRACK_AVAILABLE and BYTETracker is not None:
-                    online_targets = self.person_tracker.update(detections_np_for_tracker, 
-                                                                (self.cap_h, self.cap_w), 
-                                                                (self.cap_h, self.cap_w))
+                    extracted_features = [None] * len(detections_np_for_tracker) # Default if ReID is off
+                    if self.config.reid.enable_reid and self.reid_model:
+                        bboxes_for_reid = detections_np_for_tracker[:, :4]
+                        extracted_features = self._extract_features(frame, bboxes_for_reid)
+                    
+                    online_targets = self.person_tracker.update(detections_np_for_tracker,
+                                                                (self.cap_h, self.cap_w),
+                                                                (self.cap_h, self.cap_w),
+                                                                features_list=extracted_features) # New argument
                     for t in online_targets:
                         tlwh, track_id, score = t.tlwh, t.track_id, t.score
-                        if tlwh[2]*tlwh[3] > 0: 
+                        if tlwh[2]*tlwh[3] > 0:
                             tracked_objects_list.append([tlwh[0], tlwh[1], tlwh[0]+tlwh[2], tlwh[1]+tlwh[3], track_id, score])
                 else: 
                     sort_output = self.person_tracker.update(detections_np_for_tracker) 
                     for trk_sort in sort_output: # output is [x1,y1,x2,y2,track_id]
                         tracked_objects_list.append(list(trk_sort) + [trk_sort[4] if len(trk_sort)>4 else 1.0]) 
             else: # no detections, call update to age tracks
-                empty_dets = np.empty((0,5))
+                empty_dets = np.empty((0,5)) # ByteTrack expects shape (0,5) for empty dets
                 if self.tracker_type == 'bytetrack' and BYTETRACK_AVAILABLE and BYTETracker is not None:
-                    online_targets = self.person_tracker.update(empty_dets, 
-                                                                (self.cap_h, self.cap_w), 
-                                                                (self.cap_h, self.cap_w))
+                    # For empty detections, features_list would be empty or None
+                    online_targets = self.person_tracker.update(empty_dets,
+                                                                (self.cap_h, self.cap_w),
+                                                                (self.cap_h, self.cap_w),
+                                                                features_list=[]) # Pass empty list for features
                     for t in online_targets: tlwh, track_id, score = t.tlwh, t.track_id, t.score; tracked_objects_list.append([tlwh[0],tlwh[1],tlwh[0]+tlwh[2],tlwh[1]+tlwh[3],track_id,score])
                 else: # SORT
                     sort_output = self.person_tracker.update(empty_dets)

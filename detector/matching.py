@@ -122,7 +122,8 @@ def embedding_distance(tracks, detections, metric='cosine'):
     cost_matrix = np.zeros((len(tracks), len(detections)), dtype=np.float)
     if cost_matrix.size == 0:
         return cost_matrix
-    det_features = np.asarray([track.curr_feat for track in detections], dtype=np.float)
+    # Corrected: loop variable for detections should be 'det' (or similar) not 'track'
+    det_features = np.asarray([det.curr_feat for det in detections], dtype=np.float)
     #for i, track in enumerate(tracks):
         #cost_matrix[i, :] = np.maximum(0.0, cdist(track.smooth_feat.reshape(1,-1), det_features, metric))
     track_features = np.asarray([track.smooth_feat for track in tracks], dtype=np.float)
