@@ -43,7 +43,7 @@ Watch a quick demonstration of the system in action:
 *   Ultralytics YOLO
 *   DeepFace (and its TensorFlow backend)
 *   SORT (custom implementation with `filterpy` and `scipy`)
-*   ByteTrack (adapted from YOLOX implementation, requires `cython-bbox`)
+*   ByteTrack (integrated as a local submodule from YOLOX, requires `cython-bbox`)
 *   `yt-dlp` (for YouTube URL processing)
 *   FFmpeg (recommended for `yt-dlp` for optimal format handling and merging)
 *   Gradio

@@ -7,13 +7,8 @@ import torch
 import torch.nn.functional as F
 
 from .kalman_filter import KalmanFilter
-from yolox.tracker import matching # This 'matching' is from yolox, ensure it's intended or replace
-                                  # If you have local matching, it should be `from . import matching`
-                                  # For now, assuming original intent or this is a placeholder.
-                                  # Given the other matching.py, this likely should be `from .matching import ...`
-                                  # However, the code uses `matching.iou_distance` etc directly.
-                                  # Will use the provided `from .matching import ...` from the codebase.
-from . import matching as local_matching # Renamed to avoid conflict if yolox.tracker.matching is also used elsewhere.
+# from yolox.tracker import matching # Removed as per plan
+from . import matching # Use local matching module
 
 from .basetrack import BaseTrack, TrackState
 
@@ -211,10 +206,10 @@ class BYTETracker(object):
         strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         # Predict the current location with KF
         STrack.multi_predict(strack_pool)
-        dists = local_matching.iou_distance(strack_pool, detections)
+        dists = matching.iou_distance(strack_pool, detections) # Changed local_matching to matching
         if not self.args.mot20: # mot20 is a flag in the original ByteTrack args
-            dists = local_matching.fuse_score(dists, detections)
-        matches, u_track, u_detection = local_matching.linear_assignment(dists, thresh=self.args.match_thresh)
+            dists = matching.fuse_score(dists, detections) # Changed local_matching to matching
+        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=self.args.match_thresh) # Changed local_matching to matching
 
         for itracked, idet in matches:
             track = strack_pool[itracked]
@@ -235,8 +230,8 @@ class BYTETracker(object):
         else:
             detections_second = []
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]
-        dists = local_matching.iou_distance(r_tracked_stracks, detections_second)
-        matches, u_track, u_detection_second = local_matching.linear_assignment(dists, thresh=0.5) # Fixed threshold for second association
+        dists = matching.iou_distance(r_tracked_stracks, detections_second) # Changed local_matching to matching
+        matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=0.5) # Changed local_matching to matching
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]
             det = detections_second[idet]
@@ -255,10 +250,10 @@ class BYTETracker(object):
 
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
         detections = [detections[i] for i in u_detection]
-        dists = local_matching.iou_distance(unconfirmed, detections)
+        dists = matching.iou_distance(unconfirmed, detections) # Changed local_matching to matching
         if not self.args.mot20:
-            dists = local_matching.fuse_score(dists, detections)
-        matches, u_unconfirmed, u_detection = local_matching.linear_assignment(dists, thresh=0.7) # Threshold for unconfirmed
+            dists = matching.fuse_score(dists, detections) # Changed local_matching to matching
+        matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7) # Changed local_matching to matching
         for itracked, idet in matches:
             unconfirmed[itracked].update(detections[idet], self.frame_id)
             activated_starcks.append(unconfirmed[itracked])
@@ -320,7 +315,7 @@ def sub_stracks(tlista, tlistb):
 
 
 def remove_duplicate_stracks(stracksa, stracksb):
-    pdist = local_matching.iou_distance(stracksa, stracksb)
+    pdist = matching.iou_distance(stracksa, stracksb) # Changed local_matching to matching
     pairs = np.where(pdist < 0.15)
     dupa, dupb = list(), list()
     for p, q in zip(*pairs):
