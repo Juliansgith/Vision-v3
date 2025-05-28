@@ -294,7 +294,7 @@ def launch_detection_process(
         return f"[ERROR] Failed to start detection: {str(e)[:300]}"
 
 # --- (Gradio UI Blocks definition remains the same) ---
-with gr.Blocks(theme=gr.themes.Soft(primary_hue="blue", secondary_hue="orange")) as demo:
+with gr.Blocks(theme=gr.themes.Glass()) as demo:
     gr.Markdown(
         """
         # 🚀 Real-time Multi-Analysis Detector
