@@ -5,7 +5,7 @@ import logging # Added
 # import argparse # No longer directly needed for args namespace
 from ultralytics import YOLO
 from deepface import DeepFace
-from ..config import AppSettings # Import AppSettings
+from config import AppSettings # Import AppSettings
 from .utils import draw_detections, draw_info_overlay, iou_calc_for_association
 import torch
 import torchvision.transforms as T # Added for ReID

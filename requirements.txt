@@ -12,3 +12,4 @@ filterpy
 scipy
 cython-bbox
 yt-dlp
+lap
