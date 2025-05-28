@@ -261,3 +261,38 @@ def list_available_cameras(max_cameras_to_check=10):
 
     print(f"[INFO] Cameras for Gradio: {dropdown_choices}")
     return dropdown_choices, webcam_id_map
+
+import logging
+
+def setup_logging(level=logging.INFO):
+    """
+    Configures the root logger for the application.
+    """
+    # Get the root logger.
+    logger = logging.getLogger()
+    
+    # Set the logging level.
+    logger.setLevel(level)
+    
+    # Prevent multiple handlers if setup_logging is called more than once
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    # Create a console handler (StreamHandler).
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level) # Set level for the handler as well
+    
+    # Define a log format.
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    
+    # Add the handler to the logger.
+    logger.addHandler(console_handler)
+    
+    # You can also add a FileHandler here if needed in the future
+    # file_handler = logging.FileHandler('app.log')
+    # file_handler.setLevel(logging.DEBUG) # Example: log more details to file
+    # file_handler.setFormatter(formatter)
+    # logger.addHandler(file_handler)
+
+    logger.info("Logging setup complete.") # Initial log to confirm setup

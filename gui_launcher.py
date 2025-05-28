@@ -1,13 +1,14 @@
 # gui_launcher.py
 import gradio as gr
-import argparse
 import os
 import sys
 import torch
 import time
 import threading
+import logging # Added
 from detector.object_detector import ObjectDetector
-from detector.utils import list_available_cameras
+from detector.utils import list_available_cameras, setup_logging # Added setup_logging
+from config import AppSettings, YOLOConfig, TrackerConfig, TrackerParamsSORT, TrackerParamsByteTrack, DeepFaceConfig, DisplayConfig, AppConfig
 import subprocess
 import tempfile 
 import shutil 
@@ -33,15 +34,19 @@ downloaded_youtube_video_info = {"path": None, "dir": None}
 TEMP_VIDEO_DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_videos")
 os.makedirs(TEMP_VIDEO_DOWNLOAD_DIR, exist_ok=True)
 
+# Setup logging at the script level
+setup_logging() # Added
+logger = logging.getLogger(__name__) # Added
+
 
 def cleanup_temp_youtube_video():
     global downloaded_youtube_video_info
     if downloaded_youtube_video_info["dir"] and os.path.exists(downloaded_youtube_video_info["dir"]):
         try:
             shutil.rmtree(downloaded_youtube_video_info["dir"])
-            print(f"[INFO] Cleaned up temporary YouTube video directory: {downloaded_youtube_video_info['dir']}")
+            logger.info(f"Cleaned up temporary YouTube video directory: {downloaded_youtube_video_info['dir']}")
         except Exception as e:
-            print(f"[WARNING] Could not delete temporary YouTube video directory {downloaded_youtube_video_info['dir']}: {e}")
+            logger.warning(f"Could not delete temporary YouTube video directory {downloaded_youtube_video_info['dir']}: {e}", exc_info=True)
     downloaded_youtube_video_info = {"path": None, "dir": None}
 
 
@@ -72,13 +77,13 @@ def download_youtube_video_to_project_subdir(youtube_url):
             '--fragment-retries', '3',
             '--verbose'
         ]
-        print(f"[INFO] Running yt-dlp download command: {' '.join(command)}")
+        logger.info(f"Running yt-dlp download command: {' '.join(command)}")
         
         process_result = subprocess.run(command, capture_output=True, text=True, timeout=300)
 
-        print(f"[DEBUG] yt-dlp STDOUT:\n{process_result.stdout}")
-        print(f"[DEBUG] yt-dlp STDERR:\n{process_result.stderr}")
-        print(f"[DEBUG] yt-dlp return code: {process_result.returncode}")
+        logger.debug(f"yt-dlp STDOUT:\n{process_result.stdout}")
+        logger.debug(f"yt-dlp STDERR:\n{process_result.stderr}")
+        logger.debug(f"yt-dlp return code: {process_result.returncode}")
 
         if process_result.returncode == 0:
             downloaded_file_path = None
@@ -100,26 +105,24 @@ def download_youtube_video_to_project_subdir(youtube_url):
 
 
             if downloaded_file_path:
-                print(f"[INFO] YouTube video downloaded successfully to: {downloaded_file_path}")
+                logger.info(f"YouTube video downloaded successfully to: {downloaded_file_path}")
                 downloaded_youtube_video_info["path"] = downloaded_file_path
                 return downloaded_file_path
             else:
-                print(f"[ERROR] yt-dlp reported success but could not find a valid downloaded video file in {current_download_dir}.")
+                logger.error(f"yt-dlp reported success but could not find a valid downloaded video file in {current_download_dir}.")
                 return None
         else:
-            print(f"[ERROR] yt-dlp download failed for URL: {youtube_url}. Return code: {process_result.returncode}.")
+            logger.error(f"yt-dlp download failed for URL: {youtube_url}. Return code: {process_result.returncode}. STDERR: {process_result.stderr}")
             return None
 
     except FileNotFoundError:
-        print("[ERROR] yt-dlp command not found. Please ensure it's installed and in your system's PATH.")
+        logger.error("yt-dlp command not found. Please ensure it's installed and in your system's PATH.", exc_info=True)
         return None
     except subprocess.TimeoutExpired:
-        print(f"[ERROR] yt-dlp download command timed out for URL: {youtube_url}.")
+        logger.error(f"yt-dlp download command timed out for URL: {youtube_url}.", exc_info=True)
         return None
     except Exception as e:
-        print(f"[ERROR] Error downloading YouTube URL {youtube_url} with yt-dlp: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error downloading YouTube URL {youtube_url} with yt-dlp: {e}", exc_info=True)
         return None
 def check_gpu_availability():
     gpu_available = torch.cuda.is_available()
@@ -140,28 +143,27 @@ def check_gpu_availability():
 def get_default_device_option(): return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def run_detector_in_thread(args_namespace):
+def run_detector_in_thread(current_app_settings: AppSettings):
     global detection_thread, detector_instance_for_thread
-    print("[THREAD] Detection thread started.")
+    thread_logger = logging.getLogger(__name__ + ".DetectionThread") # Specific logger for the thread
+    thread_logger.info("Detection thread started.")
     try:
-        detector_instance_for_thread = ObjectDetector(args_namespace)
+        detector_instance_for_thread = ObjectDetector(current_app_settings)
         if detector_instance_for_thread.cap and detector_instance_for_thread.cap.isOpened():
-            print("[THREAD] >>> OpenCV window should appear now. Press 'q' or 'X' in that window to quit. <<<")
+            thread_logger.info(">>> OpenCV window should appear now. Press 'q' or 'X' in that window to quit. <<<")
             detector_instance_for_thread.run_opencv_window()
-            print("[THREAD] OpenCV detection process finished.")
+            thread_logger.info("OpenCV detection process finished.")
         else:
-            print("[THREAD][ERROR] Failed to initialize video source in thread.")
+            thread_logger.error("Failed to initialize video source in thread.")
     except SystemExit:
-        print("[THREAD][ERROR] Detection process terminated early (SystemExit, e.g. model load error).")
+        thread_logger.error("Detection process terminated early (SystemExit, e.g. model load error).")
     except Exception as e:
-        print(f"[THREAD][ERROR] Unexpected error in detection thread: {e}")
-        import traceback; traceback.print_exc()
+        thread_logger.error(f"Unexpected error in detection thread: {e}", exc_info=True)
     finally:
-        print("[THREAD] Detection thread finished execution.")
-        if hasattr(args_namespace, 'source') and \
-           downloaded_youtube_video_info["path"] and \
-           args_namespace.source == downloaded_youtube_video_info["path"]:
-             cleanup_temp_youtube_video() 
+        thread_logger.info("Detection thread finished execution.")
+        if downloaded_youtube_video_info["path"] and \
+           current_app_settings.app.source == downloaded_youtube_video_info["path"]:
+             cleanup_temp_youtube_video()
         
         detector_instance_for_thread = None
         if threading.current_thread() is detection_thread:
@@ -170,17 +172,17 @@ def run_detector_in_thread(args_namespace):
 def launch_detection_process(
                             input_source_display, video_file_upload, video_file_path_or_url_text,
                             yolo_model_selection, custom_yolo_model_path,
-                            conf_thresh, iou_thresh, face_person_iou_thresh, target_classes,
-                            hide_conf, hide_labels, show_track_id_initially, line_thickness,
-                            no_info_overlay, selected_device,
-                            enable_emotion_detection, enable_age_gender_detection,
-                            deepface_backend_selection, facial_analysis_interval,
-                            max_faces_to_analyze,
-                            async_deepface, crop_for_deepface,
-                            tracker_type_selected,
-                            sort_max_age, sort_min_hits, sort_iou_thresh,
-                            bt_track_thresh, bt_track_buffer, bt_match_thresh,
-                            progress=gr.Progress(track_tqdm=True)): 
+                            conf_thresh_slider_val, iou_thresh_slider_val, face_person_iou_thresh_slider_val, target_classes_tb_val,
+                            hide_conf_cb_val, hide_labels_cb_val, show_track_id_cb_val, line_thickness_slider_val,
+                            no_info_overlay_cb_val, device_dd_val,
+                            enable_emotion_cb_val, enable_age_gender_cb_val,
+                            deepface_backend_dd_val, facial_analysis_interval_slider_val,
+                            max_faces_to_analyze_slider_val,
+                            async_deepface_cb_val, crop_for_deepface_cb_val,
+                            tracker_type_dd_val,
+                            sort_max_age_slider_val, sort_min_hits_slider_val, sort_iou_thresh_slider_val,
+                            bt_track_thresh_slider_val, bt_track_buffer_slider_val, bt_match_thresh_slider_val,
+                            progress=gr.Progress(track_tqdm=True)):
     global detection_thread
 
     if detection_thread is not None and detection_thread.is_alive():
@@ -195,40 +197,53 @@ def launch_detection_process(
         if video_file_upload is not None:
             source_value = video_file_upload.name
         else:
-            return "[ERROR] 'Use Uploaded Video File' selected, but no file uploaded."
+            err_msg = "[ERROR] 'Use Uploaded Video File' selected, but no file uploaded."
+            logger.error(err_msg)
+            return err_msg
     elif input_source_display == "Use Video Path or URL":
         if video_file_path_or_url_text:
             path_or_url = video_file_path_or_url_text.strip()
             if "youtube.com/" in path_or_url or "youtu.be/" in path_or_url:
-                progress(0.1, desc="Attempting YouTube download...") 
-                local_yt_file = download_youtube_video_to_project_subdir(path_or_url) 
-                progress(0.3, desc="YouTube download attempt finished.") 
+                progress(0.1, desc="Attempting YouTube download...")
+                local_yt_file = download_youtube_video_to_project_subdir(path_or_url)
+                progress(0.3, desc="YouTube download attempt finished.")
                 if local_yt_file:
                     source_value = local_yt_file
                 else:
-                    return f"[ERROR] Could not download YouTube video: {path_or_url}. Check console for yt-dlp errors."
+                    # download_youtube_video_to_project_subdir already logs specifics
+                    err_msg = f"[ERROR] Could not download YouTube video: {path_or_url}. Check console logs for details."
+                    logger.error(f"YouTube download failed for URL: {path_or_url}") # General log here
+                    return err_msg
             elif path_or_url.startswith("http://") or path_or_url.startswith("https://"):
                 source_value = path_or_url
             elif os.path.exists(path_or_url):
                 source_value = path_or_url
             else:
-                return f"[ERROR] Video file path or URL invalid/not found: {path_or_url}"
+                err_msg = f"[ERROR] Video file path or URL invalid/not found: {path_or_url}"
+                logger.error(err_msg)
+                return err_msg
         else:
-            return "[ERROR] 'Use Video Path or URL' selected, but no path/URL entered."
+            err_msg = "[ERROR] 'Use Video Path or URL' selected, but no path/URL entered."
+            logger.error(err_msg)
+            return err_msg
     elif input_source_display in WEBCAM_ID_MAP:
         source_value = str(WEBCAM_ID_MAP[input_source_display])
     else:
-        return f"[ERROR] Invalid input source selected: {input_source_display}."
+        err_msg = f"[ERROR] Invalid input source selected: {input_source_display}."
+        logger.error(err_msg)
+        return err_msg
 
-    if source_value is None:
-        return "[ERROR] Could not determine video source."
+    if source_value is None: # Should be caught by earlier checks, but as a safeguard
+        err_msg = "[ERROR] Could not determine video source. Please check selection and input."
+        logger.error(err_msg)
+        return err_msg
 
-    progress(0.4, desc="Loading YOLO model...") 
-    actual_yolo_model = custom_yolo_model_path if custom_yolo_model_path else yolo_model_selection
+    progress(0.4, desc="Loading YOLO model...")
+    actual_yolo_model_path_gui = custom_yolo_model_path if custom_yolo_model_path else yolo_model_selection
     script_dir = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
-    potential_paths = [ actual_yolo_model, os.path.join(script_dir, actual_yolo_model) ]
-    if not os.path.isabs(actual_yolo_model):
-        potential_paths.append(os.path.join(os.getcwd(), actual_yolo_model))
+    potential_paths = [ actual_yolo_model_path_gui, os.path.join(script_dir, actual_yolo_model_path_gui) ]
+    if not os.path.isabs(actual_yolo_model_path_gui):
+        potential_paths.append(os.path.join(os.getcwd(), actual_yolo_model_path_gui))
 
     found_model_path = None
     for p_path in potential_paths:
@@ -237,60 +252,84 @@ def launch_detection_process(
             break
     if not found_model_path:
         if downloaded_youtube_video_info["path"]: cleanup_temp_youtube_video()
-        return f"[ERROR] YOLO model file not found: {actual_yolo_model}. Checked CWD, script dir, and as provided."
-    actual_yolo_model = found_model_path
+        err_msg = f"YOLO model file not found: {actual_yolo_model_path_gui}. Checked CWD, script dir, and as provided."
+        logger.error(err_msg)
+        return f"[ERROR] {err_msg}"
     
-    print(f"[GUI LAUNCHER] Preparing to launch detection with settings:")
-    print(f"  Source: {source_value}, Model: {os.path.basename(actual_yolo_model)}, Device: {selected_device}")
-    print(f"  Tracker: {tracker_type_selected.upper()}")
-    print(f"  Conf: {conf_thresh}, IoU: {iou_thresh}, Face-Person IoU: {face_person_iou_thresh}")
-    print(f"  Classes: {target_classes if target_classes else 'All'}")
-    print(f"  Display: HideConf={hide_conf}, HideLabels={hide_labels}, ShowTrackID={show_track_id_initially}, LineThick={line_thickness}, NoInfo={no_info_overlay}")
-    print(f"  Facial: Emotion={enable_emotion_detection}, AgeGender={enable_age_gender_detection}, Backend={deepface_backend_selection}, Interval={facial_analysis_interval}, MaxFaces={max_faces_to_analyze}, Async={async_deepface}, CropForDF={crop_for_deepface}")
-    if tracker_type_selected == 'sort':
-        print(f"  SORT: MaxAge={sort_max_age}, MinHits={sort_min_hits}, IoU={sort_iou_thresh}")
-    elif tracker_type_selected == 'bytetrack':
-        print(f"  ByteTrack: TrackThresh={bt_track_thresh}, TrackBuffer={bt_track_buffer}, MatchThresh={bt_match_thresh}")
+    yolo_classes_list = [cls.strip() for cls in target_classes_tb_val.split(',')] if target_classes_tb_val else None
 
-
-    args = argparse.Namespace(
-        model=actual_yolo_model, source=source_value, conf_thresh=conf_thresh,
-        iou_thresh=iou_thresh, classes=target_classes if target_classes else None,
-        hide_conf=hide_conf, hide_labels=hide_labels, line_thickness=line_thickness,
-        output_dir="output", no_info=no_info_overlay, device=selected_device,
-        enable_emotion=enable_emotion_detection, enable_age_gender=enable_age_gender_detection,
-        deepface_backend=deepface_backend_selection,
-        show_track_id=show_track_id_initially,
-        facial_analysis_interval=facial_analysis_interval,
-        max_faces_to_analyze=max_faces_to_analyze,
-        async_deepface=async_deepface, crop_for_deepface=crop_for_deepface,
-        face_person_iou_thresh=face_person_iou_thresh,
-        tracker_type=tracker_type_selected,
-        sort_max_age=sort_max_age, sort_min_hits=sort_min_hits, sort_iou_thresh=sort_iou_thresh,
-        bytetrack_track_thresh=bt_track_thresh, bytetrack_track_buffer=bt_track_buffer, bytetrack_match_thresh=bt_match_thresh
+    app_settings = AppSettings(
+        app=AppConfig(
+            source=source_value,
+            output_dir="output" # Default output_dir, can be made configurable in GUI if needed
+        ),
+        yolo=YOLOConfig(
+            model=found_model_path,
+            device=device_dd_val,
+            conf_thresh=conf_thresh_slider_val,
+            iou_thresh=iou_thresh_slider_val,
+            classes=yolo_classes_list
+        ),
+        tracker=TrackerConfig(
+            tracker_type=tracker_type_dd_val,
+            show_track_id=show_track_id_cb_val,
+            sort_params=TrackerParamsSORT(
+                sort_max_age=sort_max_age_slider_val,
+                sort_min_hits=sort_min_hits_slider_val,
+                sort_iou_thresh=sort_iou_thresh_slider_val
+            ),
+            bytetrack_params=TrackerParamsByteTrack(
+                bytetrack_track_thresh=bt_track_thresh_slider_val,
+                bytetrack_track_buffer=bt_track_buffer_slider_val,
+                bytetrack_match_thresh=bt_match_thresh_slider_val
+            )
+        ),
+        deepface=DeepFaceConfig(
+            enable_emotion=enable_emotion_cb_val,
+            enable_age_gender=enable_age_gender_cb_val,
+            deepface_backend=deepface_backend_dd_val,
+            facial_analysis_interval=facial_analysis_interval_slider_val,
+            max_faces_to_analyze=max_faces_to_analyze_slider_val,
+            face_person_iou_thresh=face_person_iou_thresh_slider_val,
+            async_deepface=async_deepface_cb_val,
+            crop_for_deepface=crop_for_deepface_cb_val
+        ),
+        display=DisplayConfig(
+            hide_conf=hide_conf_cb_val,
+            hide_labels=hide_labels_cb_val,
+            line_thickness=line_thickness_slider_val,
+            no_info=no_info_overlay_cb_val
+        )
     )
     
-    progress(0.5, desc="Starting detection thread...") 
+    logger.info(f"Preparing to launch detection with settings:\n{app_settings.model_dump_json(indent=2)}")
+    
+    progress(0.5, desc="Starting detection thread...")
     try:
-        detection_thread = threading.Thread(target=run_detector_in_thread, args=(args,))
+        detection_thread = threading.Thread(target=run_detector_in_thread, args=(app_settings,))
         detection_thread.daemon = True
         detection_thread.start()
-        progress(1.0, desc="Detection thread started.") 
+        progress(1.0, desc="Detection thread started.")
+        logger.info("Detection thread initiated.")
         time.sleep(2.5) 
+        
         if detection_thread and detection_thread.is_alive():
             if detector_instance_for_thread and detector_instance_for_thread.cap and detector_instance_for_thread.cap.isOpened():
+                logger.info("Detection process started successfully, OpenCV window should be active.")
                 return "[STATUS] Detection process started. OpenCV window should appear. Press 'q' in that window to quit."
-            else:
+            else: 
+                logger.error("Detection thread started, but failed to initialize video source or critical components. Check console for errors from the thread.")
                 detection_thread.join(timeout=3.5) 
-                if hasattr(args, 'source') and downloaded_youtube_video_info["path"] and args.source == downloaded_youtube_video_info["path"]:
+                if app_settings.app.source == downloaded_youtube_video_info["path"]:
                      cleanup_temp_youtube_video()
                 return "[ERROR] Detection thread started, but failed to initialize video source or critical components. Check console for errors from the thread."
         else: 
+            logger.error("Failed to start or sustain detection thread. Check console for errors.")
             if downloaded_youtube_video_info["path"]: cleanup_temp_youtube_video() 
             return "[ERROR] Failed to start or sustain detection thread. Check console for errors."
     except Exception as e:
-        if downloaded_youtube_video_info["path"]: cleanup_temp_youtube_video() 
-        print(f"[GUI LAUNCHER][ERROR] Failed to start detection thread: {e}"); import traceback; traceback.print_exc()
+        logger.error(f"Failed to start detection thread: {e}", exc_info=True)
+        if downloaded_youtube_video_info["path"]: cleanup_temp_youtube_video()
         return f"[ERROR] Failed to start detection: {str(e)[:300]}"
 
 # --- (Gradio UI Blocks definition remains the same) ---
@@ -381,18 +420,18 @@ with gr.Blocks(theme=gr.themes.Glass()) as demo:
     start_button.click(
         fn=launch_detection_process,
         inputs=[
-            input_source_dd, video_file_upload_component, video_file_path_or_url_component, 
-            yolo_model_dd, custom_yolo_model_tb,
-            conf_thresh_slider, iou_thresh_slider, face_person_iou_thresh_slider, target_classes_tb,
-            hide_conf_cb, hide_labels_cb, show_track_id_cb, line_thickness_slider,
-            no_info_overlay_cb, device_dd,
-            enable_emotion_cb, enable_age_gender_cb,
-            deepface_backend_dd, facial_analysis_interval_slider,
-            max_faces_to_analyze_slider,
-            async_deepface_cb, crop_for_deepface_cb,
-            tracker_type_dd,
-            sort_max_age_slider, sort_min_hits_slider, sort_iou_thresh_slider,
-            bt_track_thresh_slider, bt_track_buffer_slider, bt_match_thresh_slider
+            input_source_dd, video_file_upload_component, video_file_path_or_url_component,
+            yolo_model_dd, custom_yolo_model_tb, # These are component names
+            conf_thresh_slider, iou_thresh_slider, face_person_iou_thresh_slider, target_classes_tb, # These are component names
+            hide_conf_cb, hide_labels_cb, show_track_id_cb, line_thickness_slider, # Component names
+            no_info_overlay_cb, device_dd, # Component names
+            enable_emotion_cb, enable_age_gender_cb, # Component names
+            deepface_backend_dd, facial_analysis_interval_slider, # Component names
+            max_faces_to_analyze_slider, # Component name
+            async_deepface_cb, crop_for_deepface_cb, # Component names
+            tracker_type_dd, # Component name
+            sort_max_age_slider, sort_min_hits_slider, sort_iou_thresh_slider, # Component names
+            bt_track_thresh_slider, bt_track_buffer_slider, bt_match_thresh_slider # Component names
         ],
         outputs=output_status_text
     )
